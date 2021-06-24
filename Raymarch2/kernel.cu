@@ -6,7 +6,7 @@
 #include <SDL.h>
 
 #define SCREEN_WIDTH 1000
-#define SCREEN_HEIGHT 720
+#define SCREEN_HEIGHT 600
 #define viewangle 1.0472f
 #define MAX_DIST 100
 #define MIN_DIST 0.01f
@@ -591,12 +591,13 @@ float CalculateLighting(Light* lights, Vector3 position, int debug) {
 
 __global__
 void ColourCalc(Uint32* pixels, Vector3 currPos, Vector3 currRot, Light* lights, Vector3* bounds) {
+
 	//Blockid is vertical, threadid is horizontal
 	int index = blockIdx.x * blockDim.x + threadIdx.x;
 
 	int debug = 0;
 
-	Ray ray = genRay(currPos, currRot, threadIdx.x, blockIdx.x, bounds, debug);
+	Ray ray = genRay(currPos, currRot, index % SCREEN_WIDTH, index / SCREEN_WIDTH, bounds, debug);
 
 	/*ray.dir = ray.dir.RotX(currRot.x);
 	ray.dir = ray.dir.RotY(currRot.y);*/
@@ -664,9 +665,12 @@ int main(int argc, char** argv)
 	cudaMallocManaged(&lights, 1 * sizeof(Light));
 	lights[0] = Light(Vector3(0, 5, 0));
 
-	void* pixels;
+	cudaStream_t stream1;
+	cudaStreamCreate(&stream1);
 
-	pixels = malloc(SCREEN_WIDTH * SCREEN_HEIGHT * sizeof(Uint32));
+	void* pixelBuffer;
+
+	cudaMallocManaged(&pixelBuffer, SCREEN_WIDTH * SCREEN_HEIGHT * sizeof(Uint32));
 	//Initialize SDL
 	if (SDL_Init(SDL_INIT_VIDEO) < 0)
 	{
@@ -686,7 +690,7 @@ int main(int argc, char** argv)
 			screenSurface = SDL_GetWindowSurface(window);
 			SDL_SetRelativeMouseMode(SDL_TRUE);
 
-			cudaMallocManaged(&pixels, SCREEN_WIDTH * SCREEN_HEIGHT * sizeof(Uint32));
+			
 
 
 			int time = SDL_GetTicks();
@@ -703,11 +707,10 @@ int main(int argc, char** argv)
 				while (SDL_PollEvent(&e) != 0)
 				{
 					switch (e.type) {
-					/*case (SDL_MOUSEMOTION):
+					case (SDL_MOUSEMOTION):
 						currRot.x += e.motion.yrel*M_SENS;
 						currRot.y += e.motion.xrel*M_SENS;
 						break;
-						*/
 					case (SDL_KEYDOWN):
 						switch (e.key.keysym.sym) {
 							case SDLK_w:
@@ -775,9 +778,14 @@ int main(int argc, char** argv)
 
 				SDL_LockSurface(screenSurface);
 
-				ColourCalc <<<SCREEN_HEIGHT, SCREEN_WIDTH>>> ((Uint32*)pixels, currPos, currRot, lights, bounds);
+				int blocks = SCREEN_HEIGHT * SCREEN_WIDTH / 1024;
+				
+				
+				ColourCalc <<<blocks, 1024>>> ((Uint32*)pixelBuffer, currPos, currRot, lights, bounds);
+				
+				cudaMemcpyAsync(screenSurface->pixels, pixelBuffer, SCREEN_WIDTH* SCREEN_HEIGHT * sizeof(Uint32), cudaMemcpyDeviceToHost, stream1); //(cudaStream_t)1);
 				cudaDeviceSynchronize();
-				cudaMemcpy(screenSurface->pixels, pixels, SCREEN_WIDTH * SCREEN_HEIGHT * sizeof(Uint32), cudaMemcpyDeviceToHost);
+				
 				/*sphere->pos.x = 20;//cos(SDL_GetTicks() / 1000.0f);
 				sphere->pos.y = sin(SDL_GetTicks() / 1000.0f);
 				cube->pos.x = 5*sin(SDL_GetTicks() / 1000.0f);
@@ -794,6 +802,7 @@ int main(int argc, char** argv)
 				deltaTime = (SDL_GetTicks() - time) / 1000.0f;
 				printf("Time for frame: %ums\n", SDL_GetTicks() - time);
 				time = SDL_GetTicks();
+
 				//SDL_memcpy(screenSurface->pixels, pixels, SCREEN_WIDTH * SCREEN_HEIGHT * sizeof(Uint32));
 
 				SDL_UnlockSurface(screenSurface);

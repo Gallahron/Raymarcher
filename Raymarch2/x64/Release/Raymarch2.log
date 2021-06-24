@@ -8,7 +8,7 @@ C:/Users/pinks/source/repos/Raymarch2/Raymarch2/kernel.cu(324): warning : variab
 C:/Users/pinks/source/repos/Raymarch2/Raymarch2/kernel.cu(573): warning : variable "noLights" was declared but never referenced
   
   kernel.cu
-C:\Users\pinks\source\repos\Raymarch2\Raymarch2\kernel.cu(791): warning C4700: uninitialized local variable 'deltaTime' used
+C:\Users\pinks\source\repos\Raymarch2\Raymarch2\kernel.cu(799): warning C4700: uninitialized local variable 'deltaTime' used
      Creating library C:\Users\pinks\source\repos\Raymarch2\x64\Release\Raymarch2.lib and object C:\Users\pinks\source\repos\Raymarch2\x64\Release\Raymarch2.exp
   LINK : /LTCG specified but no code generation required; remove /LTCG from the link command line to improve linker performance
   Raymarch2.vcxproj -> C:\Users\pinks\source\repos\Raymarch2\x64\Release\Raymarch2.exe
