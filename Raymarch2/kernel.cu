@@ -454,7 +454,7 @@ int main(int argc, char** argv)
 
 				
 
-				player.trans.pos = player.trans.pos.Add(veloc.ApplyRot(player.trans.rot).Mul(deltaTime));
+				player.trans.pos = player.trans.pos.Add(player.veloc.ApplyRot(player.trans.rot).Mul(deltaTime));
 				lights[0] = player.trans.pos.Add(Vector3(0, 10, 0));
 
 				deltaTime = (SDL_GetTicks() - time) / 1000.0f;

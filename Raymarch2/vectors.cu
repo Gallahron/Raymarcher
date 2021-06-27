@@ -52,7 +52,11 @@ public:
 
 	__device__ __host__
 		float mag() {
+#ifdef __CUDA_ARCH__
+		return __fsqrt_rd(__fmaf_rd(x, x, __fmaf_rd(y, y, __fmul_rd(z, z))));
+#else
 		return sqrt(x * x + y * y + z * z);
+#endif
 	}
 
 	__device__ __host__
@@ -67,8 +71,9 @@ public:
 
 		struct Vector3 result;
 #ifdef __CUDA_ARCH__
-		float cosThet = __cosf(angle);
-		float sinThet = __sinf(angle);
+		float cosThet;
+		float sinThet;
+		__sincosf(angle, &sinThet, &cosThet);
 #else
 		float cosThet = cos(angle);
 		float sinThet = sin(angle);
@@ -83,8 +88,9 @@ public:
 		Vector3 RotY(float angle) {
 		struct Vector3 result;
 #ifdef __CUDA_ARCH__
-		float cosThet = __cosf(angle);
-		float sinThet = __sinf(angle);
+		float cosThet;
+		float sinThet;
+		__sincosf(angle, &sinThet, &cosThet);
 #else
 		float cosThet = cos(angle);
 		float sinThet = sin(angle);
@@ -99,8 +105,9 @@ public:
 		struct Vector3 result;
 
 #ifdef __CUDA_ARCH__
-		float cosThet = __cosf(angle);
-		float sinThet = __sinf(angle);
+		float cosThet;
+		float sinThet;
+		__sincosf(angle, &sinThet, &cosThet);
 #else
 		float cosThet = cos(angle);
 		float sinThet = sin(angle);
@@ -113,7 +120,11 @@ public:
 	}
 	__device__ __host__
 		float Dot(Vector3 b) {
+#ifdef __CUDA_ARCH__
+		return __fsqrt_rd(__fmaf_rd(x, b.x, __fmaf_rd(y, b.y, __fmul_rd(z, b.z))));
+#else
 		return x * b.x + y * b.y + z * b.z;
+#endif
 	}
 	__device__ __host__
 		Vector3 normalised() {
