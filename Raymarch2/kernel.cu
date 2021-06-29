@@ -3,6 +3,9 @@
 #include "device_launch_parameters.h"
 #include "shapes.cu"
 #include "vectors.cu"
+#include "holder.cu"
+#include "distances.cu"
+#include <cuda_fp16.h>
 //#include "engine.cu"
 
 #include <stdio.h>
@@ -29,65 +32,149 @@ struct Ray {
 	int steps = 0;
 	int hit = 0;
 };
-class ShapeHolder {
-public:
-	Shape** values;
-	int length;
-	__host__
-		void AddShape(Shape* ptr) {
-		Shape** newVals;
-		cudaMallocManaged(&newVals, sizeof(Uint32) * (length + 1));
-		for (int i = 0; i < length; i++) {
-			newVals[i] = values[i];
-		}
-		newVals[length] = ptr;
-		Shape** stor = values;
-		values = newVals;
-		cudaFree(stor);
-		length++;
-	}
-	__host__
-		Shape* CreateSphere(Vector3 pos, float rad, int blended) {
-		Sphere* ptr;
-		cudaMallocManaged(&ptr, sizeof(Sphere));
-		*ptr = Sphere(pos, 0.6f, blended);
-		AddShape(ptr);
-		return ptr;
-	}
-	__host__
-		Shape* CreatePlane(float height, int blended) {
-		Plane* ptr;
-		cudaMallocManaged(&ptr, sizeof(Plane));
-		*ptr = Plane(height, blended);
-		AddShape(ptr);
-		return ptr;
-	}
-	__host__
-		Shape* CreateCube(Vector3 pos, Vector3 rot, Vector3 bounds, int blended) {
-		Cube* ptr;
-		cudaMallocManaged(&ptr, sizeof(Cube));
-		*ptr = Cube(pos, rot, bounds, blended);
 
-		AddShape(ptr);
-		return ptr;
-	}
-	__host__
-		Shape* CreateHollowCube(Vector3 pos, Vector3 rot, Vector3 bounds, float thickness, int blended) {
-		HollowCube* ptr;
-		cudaMallocManaged(&ptr, sizeof(Cube));
-		*ptr = HollowCube(pos, rot, bounds, thickness, blended);
-
-		AddShape(ptr);
-		return ptr;
-	}
-};
 /*struct ShapeHolder {
 	Shape** values;
 	int length;
 };*/
 
-//Global
-__managed__ ShapeHolder shapes;
+class Scene {
+public:
+	ShapeHolder shapes;
+	LightHolder lights;
+
+	__device__
+		DistReturn distToScene(Vector3 pos) {
+		DistReturn dist;
+		dist.dist = 9999;
+		dist.col = Vector3(1, 1, 1);
+		for (int i = 0; i < shapes.length; i++) {
+			Shape* ptr = (Shape*)shapes.values[i];
+			DistReturn newDist;
+			switch (ptr->type) {
+			case ('s'):
+				newDist = ((Sphere*)ptr)->DistanceTo(pos);
+				break;
+			case ('c'):
+				newDist = ((Cube*)ptr)->EstimatedDistance(pos);
+				if (smoothDist(dist, newDist, 0.2f).dist < dist.dist) newDist = ((Cube*)ptr)->DistanceTo(pos);
+				else newDist.dist = 9999;
+				break;
+			case ('p'):
+				newDist = ((Plane*)ptr)->DistanceTo(pos);
+				break;
+			case ('h'):
+				newDist = ((HollowCube*)ptr)->EstimatedDistance(pos);
+				if (smoothDist(dist, newDist, 0.2f).dist < dist.dist) newDist = ((HollowCube*)ptr)->DistanceTo(pos);
+				else newDist.dist = 9999;
+				break;
+			}
+			if (ptr->blend) dist = smoothDist(dist, newDist, 0.2f);//fminf(dist.dist, newDist.dist);//smoothDist(dist, newDist, 2);
+			else dist = regDist(dist, newDist);
+		}
+		return dist;
+	}
+
+	__device__
+		Vector3 getNormal(float dist, Vector3 pos) {
+		Vector3 result;
+		Vector3 offsets[] = {
+			Vector3(0.01f,0,0),
+			Vector3(0, 0.01f, 0),
+			Vector3(0, 0, 0.01f)
+		};
+		result.x = dist - distToScene(pos.Sub(offsets[0])).dist;
+		result.y = dist - distToScene(pos.Sub(offsets[1])).dist;
+		result.z = dist - distToScene(pos.Sub(offsets[2])).dist;
+		return result.normalised();
+	}
+};
+
+class devScene {
+public:
+	devShapeHolder shapes;
+	devLightHolder lights;
+
+	devScene(Scene orig) {
+		cudaMalloc(lights.values, sizeof(Uint32) * orig.lights.length);
+		for (int i = 0; i < orig.lights.length; i++) {
+			devLight* ptr;
+			cudaMalloc(&ptr, sizeof(devLight));
+			*ptr = devLight(*orig.lights.GetLight(i));
+			lights.values[i] = ptr;
+		}
+
+		cudaMalloc(shapes.values, sizeof(devShape) * orig.shapes.length);
+		for (int i = 0; i < orig.lights.length; i++) {
+			devShape* ptr;
+			Shape* curr = orig.shapes.GetShape(i);
+			switch (curr->type) {
+				case ('s'):
+					cudaMalloc(&ptr, sizeof(devSphere));
+					*ptr = devSphere(*(Sphere*)curr);
+					break;
+				case ('c'):
+					cudaMalloc(&ptr, sizeof(devCube));
+					*ptr = devCube(*(Cube*)curr);
+					break;
+				case ('p'):
+					cudaMalloc(&ptr, sizeof(devPlane));
+					*ptr = devPlane(*(Plane*)curr);
+					break;
+				case ('h'):
+					cudaMalloc(&ptr, sizeof(devHollowCube));
+					*ptr = devHollowCube(*(HollowCube*)curr);
+					break;
+			}
+			lights.values[i] = ptr;
+		}
+	}
+	__device__
+	DistReturn distToScene(Vector3 pos) {
+		DistReturn dist;
+		dist.dist = 9999;
+		dist.col = Vector3(1, 1, 1);
+		for (int i = 0; i < shapes.length; i++) {
+			Shape* ptr = (Shape*)shapes.values[i];
+			DistReturn newDist;
+			switch (ptr->type) {
+			case ('s'):
+				newDist = ((Sphere*)ptr)->DistanceTo(pos);
+				break;
+			case ('c'):
+				newDist = ((Cube*)ptr)->EstimatedDistance(pos);
+				if (smoothDist(dist, newDist, 0.2f).dist < dist.dist) newDist = ((Cube*)ptr)->DistanceTo(pos);
+				else newDist.dist = 9999;
+				break;
+			case ('p'):
+				newDist = ((Plane*)ptr)->DistanceTo(pos);
+				break;
+			case ('h'):
+				newDist = ((HollowCube*)ptr)->EstimatedDistance(pos);
+				if (smoothDist(dist, newDist, 0.2f).dist < dist.dist) newDist = ((HollowCube*)ptr)->DistanceTo(pos);
+				else newDist.dist = 9999;
+				break;
+			}
+			if (ptr->blend) dist = smoothDist(dist, newDist, 0.2f);//fminf(dist.dist, newDist.dist);//smoothDist(dist, newDist, 2);
+			else dist = regDist(dist, newDist);
+		}
+		return dist;
+	}
+
+	__device__
+		Vector3 getNormal(float dist, Vector3 pos) {
+		Vector3 result;
+		Vector3 offsets[] = {
+			Vector3(0.01f,0,0),
+			Vector3(0, 0.01f, 0),
+			Vector3(0, 0, 0.01f)
+		};
+		result.x = dist - distToScene(pos.Sub(offsets[0])).dist;
+		result.y = dist - distToScene(pos.Sub(offsets[1])).dist;
+		result.z = dist - distToScene(pos.Sub(offsets[2])).dist;
+		return result.normalised();
+	}
+};
 
 __device__
 Uint32 colorMap(Uint32 r, Uint32 g, Uint32 b) {
@@ -96,74 +183,6 @@ Uint32 colorMap(Uint32 r, Uint32 g, Uint32 b) {
 	return r + g + b;
 }
 
-__device__
-DistReturn smoothDist(DistReturn distA, DistReturn distB, float k) {
-	DistReturn result;
-	float h = __saturatef(0.5f + 0.5f * (distB.dist - distA.dist) / k);
-
-	result.col = distB.col.Lerp(distA.col, h);
-	result.dist = distB.dist * (1 - h) + distA.dist * h - k * h * (1.0f - h);
-	return result;
-}
-
-__device__
-DistReturn regDist(DistReturn distA, DistReturn distB) {
-	DistReturn result;
-	if (distA.dist < distB.dist) {
-		result.col = distA.col;
-		result.dist = distA.dist;
-	}
-	else {
-		result.col = distB.col;
-		result.dist = distB.dist;
-	}
-	return result;
-}
-__device__
-DistReturn distToScene(Vector3 pos) {
-	DistReturn dist;
-	dist.dist = 9999;
-	dist.col = Vector3(1, 1, 1);
-	for (int i = 0; i < shapes.length; i++) {
-		Shape* ptr = shapes.values[i];
-		DistReturn newDist;
-		switch (ptr->type) {
-		case ('s'):
-			newDist = ((Sphere*)ptr)->DistanceTo(pos);
-			break;
-		case ('c'):
-			newDist = ((Cube*)ptr)->EstimatedDistance(pos);
-			if (smoothDist(dist, newDist, 0.2f).dist < dist.dist) newDist = ((Cube*)ptr)->DistanceTo(pos);
-			else newDist.dist = 9999;
-			break;
-		case ('p'):
-			newDist = ((Plane*)ptr)->DistanceTo(pos);
-			break;
-		case ('h'):
-			newDist = ((HollowCube*)ptr)->EstimatedDistance(pos);
-			if (smoothDist(dist, newDist, 0.2f).dist < dist.dist) newDist = ((HollowCube*)ptr)->DistanceTo(pos);
-			else newDist.dist = 9999;
-			break;
-		}
-		if (ptr->blend) dist = smoothDist(dist, newDist, 0.2f);//fminf(dist.dist, newDist.dist);//smoothDist(dist, newDist, 2);
-		else dist = regDist(dist, newDist);
-	}
-	return dist;
-}
-
-__device__
-Vector3 getNormal(float dist, Vector3 pos) {
-	Vector3 result;
-	Vector3 offsets[] = {
-		Vector3(0.01f,0,0),
-		Vector3(0, 0.01f, 0),
-		Vector3(0, 0, 0.01f)
-	};
-	result.x = dist - distToScene(pos.Sub(offsets[0])).dist;
-	result.y = dist - distToScene(pos.Sub(offsets[1])).dist;
-	result.z = dist - distToScene(pos.Sub(offsets[2])).dist;
-	return result.normalised();
-}
 
 __device__
 Ray genRay(Transform trans, float x, float y, Vector3* bounds, int debug) {
@@ -197,16 +216,16 @@ Ray genRay(Transform trans, float x, float y, Vector3* bounds, int debug) {
 }
 
 __device__
-Ray rayMarch(Ray ray, int debug, float threshold) {
+Ray rayMarch(Ray ray, Scene scene, int debug, float threshold) {
 	float disttravelled;
 	DistReturn dist;
-	dist = distToScene(ray.pos);
+	dist = scene.distToScene(ray.pos);
 	disttravelled = 0;
 	while (disttravelled < MAX_DIST && dist.dist > threshold) {
 		ray.pos = ray.pos.Add(ray.dir.Mul(dist.dist));
 
 		disttravelled += dist.dist;
-		dist = distToScene(ray.pos);
+		dist = scene.distToScene(ray.pos);
 		ray.steps++;
 	}
 	if (dist.dist <= MIN_DIST) {
@@ -219,18 +238,18 @@ Ray rayMarch(Ray ray, int debug, float threshold) {
 }
 
 __device__
-float CalculateLighting(Light* lights, Vector3 position, int debug) {
-	int noLights = *(&lights + 1) - lights;
+float CalculateLighting(Scene scene, Vector3 position, int debug) {
+	//int noLights = *(&lights + 1) - lights;
 	float lightVal = 0;
 
 	for (int i = 0; i < 1; i++) {
 		Ray ray;
-		float dist = distToScene(position).dist;
-		ray.pos = position.Add(getNormal(dist, position).Mul(0.05f));
-		ray.dir = lights[i].pos.Sub(position).normalised();
-		ray = rayMarch(ray, 0, MIN_DIST);
+		float dist = scene.distToScene(position).dist;
+		ray.pos = position.Add(scene.getNormal(dist, position).Mul(0.05f));
+		ray.dir = scene.lights.GetLight(i)->pos.Sub(position).normalised();
+		ray = rayMarch(ray, scene, 0, MIN_DIST);
 		if (!ray.hit) {
-			lightVal += ray.dir.normalised().Dot(getNormal(dist, position));
+			lightVal += ray.dir.normalised().Dot(scene.getNormal(dist, position));
 		}
 		else lightVal = 0;
 	}
@@ -240,7 +259,7 @@ float CalculateLighting(Light* lights, Vector3 position, int debug) {
 }
 
 __global__
-void ColourCalc(Uint32* pixels, Transform trans, Light* lights, Vector3* bounds) {
+void ColourCalc(Uint32* pixels, Transform trans, Scene scene, Vector3* bounds) {
 
 	//Blockid is vertical, threadid is horizontal
 	int index = blockIdx.x * blockDim.x + threadIdx.x;
@@ -251,9 +270,9 @@ void ColourCalc(Uint32* pixels, Transform trans, Light* lights, Vector3* bounds)
 
 	/*ray.dir = ray.dir.RotX(currRot.x);
 	ray.dir = ray.dir.RotY(currRot.y);*/
-	ray = rayMarch(ray, debug, MIN_DIST);
+	ray = rayMarch(ray, scene, debug, MIN_DIST);
 	float lightVal = 0;
-	if (ray.hit) lightVal = CalculateLighting(lights, ray.pos, debug);
+	if (ray.hit) lightVal = CalculateLighting(scene, ray.pos, debug);
 	else lightVal = 1;
 	//printf("Colour: %f, %f, %f\n", ray.col.x, ray.col.y, ray.col.z);
 	unsigned int r, g, b;
@@ -271,6 +290,11 @@ void ColourCalc(Uint32* pixels, Transform trans, Light* lights, Vector3* bounds)
 	pixels[index] = colorMap(r, g, b);
 }
 
+void Draw(Uint32* pixels, Transform trans, Scene scene, Vector3* bounds) {
+	devTransform newTrans = devTransform(trans);
+	int blocks = SCREEN_HEIGHT * SCREEN_WIDTH / 1024;
+	ColourCalc <<<blocks, 1024>>> (pixels, trans, scene, bounds);
+}
 
 typedef struct Player {
 	Transform trans;
@@ -289,11 +313,14 @@ int main(int argc, char** argv)
 	player.trans.pos = Vector3(0, 0, -10);
 	player.trans.rot = Vector3(0, 0, 0);
 
+	Scene* scene;
+	cudaMallocManaged(&scene, sizeof(Scene));
 
-	Sphere* spherea = (Sphere*)shapes.CreateSphere(Vector3(0, 0, 0),0.6f, 1);
-	Sphere* sphereb = (Sphere*)shapes.CreateSphere(Vector3(0, 3, 0), 0.6f, 1);
-	Plane* plane = (Plane*)shapes.CreatePlane(-2.3f, 0);
-	Cube* cube = (Cube*)shapes.CreateCube(Vector3(0, -2.3f, 0), Vector3(0, 0, 0), Vector3(3.0f, 0.01f, 100.0f), 0);
+
+	Sphere* spherea = (Sphere*)scene->shapes.CreateSphere(Vector3(0, 0, 0),0.6f, 1);
+	Sphere* sphereb = (Sphere*)scene->shapes.CreateSphere(Vector3(0, 3, 0), 0.6f, 1);
+	Plane* plane = (Plane*)scene->shapes.CreatePlane(-2.3f, 0);
+	Cube* cube = (Cube*)scene->shapes.CreateCube(Vector3(0, -2.3f, 0), Vector3(0, 0, 0), Vector3(3.0f, 0.01f, 100.0f), 0);
 	//HollowCube* bounding = (HollowCube*)shapes.CreateHollowCube(Vector3(0, 0, 0), Vector3(0, 0, 0), Vector3(1, 1, 1), 0.05f);*/
 
 	spherea->col = Vector3(187, 134, 252);
@@ -301,9 +328,6 @@ int main(int argc, char** argv)
 	plane->col = Vector3(18, 18, 18);
 	cube->col = Vector3(50, 50, 50);
 	//bounding->col = Vector3(0, 1, 1);*/
-
-	float3 a = make_float3(1.0f, 1.0f, 1.0f);
-	float3 b = make_float3(1.0f, 1.0f, 1.0f);
 
 
 	Vector3 veloc = Vector3(0, 0, 0);
@@ -317,9 +341,9 @@ int main(int argc, char** argv)
 	bounds[1] = Vector3(0, 0, 1).RotX(yViewAngle / 2);
 	
 
-	Light* lights;
-	cudaMallocManaged(&lights, 1 * sizeof(Light));
-	lights[0] = Light(Vector3(0, 5, 0));
+	/*Light* lights;
+	cudaMallocManaged(&lights, 1 * sizeof(Light));*/
+	scene->lights.AddLight(Vector3(0, 5, 0), 1); //lights[0] = Light(Vector3(0, 5, 0));
 
 	cudaStream_t stream1;
 	cudaStreamCreate(&stream1);
@@ -435,13 +459,10 @@ int main(int argc, char** argv)
 				}
 
 				SDL_LockSurface(screenSurface);
-
-				int blocks = SCREEN_HEIGHT * SCREEN_WIDTH / 1024;
 				
+				Draw ((Uint32*)pixelBuffer, player.trans, *scene, bounds);
 				
-				ColourCalc <<<blocks, 1024>>> ((Uint32*)pixelBuffer, player.trans, lights, bounds);
-				
-				cudaMemcpyAsync(screenSurface->pixels, pixelBuffer, SCREEN_WIDTH* SCREEN_HEIGHT * sizeof(Uint32), cudaMemcpyDeviceToHost, stream1); //(cudaStream_t)1);
+				cudaMemcpyAsync(screenSurface->pixels, pixelBuffer, SCREEN_WIDTH* SCREEN_HEIGHT * sizeof(Uint32), cudaMemcpyDeviceToHost, stream1);
 				cudaDeviceSynchronize();
 				
 				/*sphere->pos.x = 20;//cos(SDL_GetTicks() / 1000.0f);
@@ -455,7 +476,7 @@ int main(int argc, char** argv)
 				
 
 				player.trans.pos = player.trans.pos.Add(player.veloc.ApplyRot(player.trans.rot).Mul(deltaTime));
-				lights[0] = player.trans.pos.Add(Vector3(0, 10, 0));
+				scene->lights.GetLight(0)->pos = player.trans.pos.Add(Vector3(0, 10, 0));
 
 				deltaTime = (SDL_GetTicks() - time) / 1000.0f;
 				printf("Time for frame: %ums\n", SDL_GetTicks() - time);
