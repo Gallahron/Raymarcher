@@ -244,7 +244,7 @@ public:
 	}
 
 	__device__
-	devVector3 Mul(float b) {
+	devVector3 Mul(__half b) {
 		devVector3 result;
 		result.x = __hmul(x, b);
 		result.y = __hmul(y, b);
@@ -265,7 +265,7 @@ public:
 	}
 
 	__device__
-	devVector3 RotX(float angle) {
+	devVector3 RotX(__half angle) {
 		struct devVector3 result;
 
 		__half sinThet = hsin(angle);
@@ -278,7 +278,7 @@ public:
 		return result;
 	}
 	__device__
-	devVector3 RotY(float angle) {
+	devVector3 RotY(__half angle) {
 		struct devVector3 result;
 
 		__half sinThet = hsin(angle);
@@ -290,7 +290,7 @@ public:
 		return result;
 	}
 	__device__
-	devVector3 RotZ(float angle) {
+	devVector3 RotZ(__half angle) {
 		struct devVector3 result;
 
 		__half sinThet = hsin(angle);
@@ -339,7 +339,7 @@ public:
 		return out;
 	}
 	__device__
-	devVector3 Lerp(devVector3 b, float s) {
+	devVector3 Lerp(devVector3 b, __half s) {
 		devVector3 result;
 		result.x = __hfma(__hsub(b.x, x), s, x);
 		result.y = __hfma(__hsub(b.y, y), s, y);

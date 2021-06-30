@@ -280,20 +280,23 @@ public:
 		devVector3 delta = TransformPoint(currPos);
 		devVector3 q = delta.abs().Sub(trans.sca);
 		devDistReturn result;
-		delta.x = hmax(q.x, 0);
-		delta.y = hmax(q.y, 0);
-		delta.z = hmax(q.z, 0);
-		result.dist = __hadd(delta.mag(), hmin(hmax(q.x, hmax(q.y, q.z)), 0));
+		delta.x = hmax(q.x, __int2half_rd(0));
+		delta.y = hmax(q.y, __int2half_rd(0));
+		delta.z = hmax(q.z, __int2half_rd(0));
+		result.dist = __hadd(delta.mag(), hmin(hmax(q.x, hmax(q.y, q.z)), __int2half_rd(0)));
 		result.col = col;
 		return result;
 	}
 	__device__
 	devVector3 GetNormal(devVector3 surfacePos) {
+		
 		return surfacePos.Sub(trans.pos).normalised();
+
 	}
 	__device__
 		devDistReturn EstimatedDistance(devVector3 currPos) {
 		devDistReturn result;
+
 		__half rad = trans.sca.mag();
 		result.dist = __hsub(trans.pos.Dist(currPos), rad);
 		return result;
