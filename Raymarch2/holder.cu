@@ -1,3 +1,6 @@
+#include "shapes.cu"
+#pragma once
+
 class AppendableArray {
 public:
 	void** values;
@@ -28,7 +31,7 @@ public:
 		Shape* CreateSphere(Vector3 pos, float rad, int blended) {
 		Sphere* ptr;
 		cudaMallocManaged(&ptr, sizeof(Sphere));
-		*ptr = Sphere(pos, 0.6f, blended);
+		*ptr = Sphere(pos, rad, blended);
 		AddElement(ptr);
 		return ptr;
 	}
@@ -63,13 +66,7 @@ public:
 		return (Shape*)values[index];
 	}
 };
-class devShapeHolder : public AppendableArray {
-public:
-	__host__ __device__
-	devShape* GetShape(int index) {
-		return (devShape*)values[index];
-	}
-};
+
 
 
 
@@ -87,12 +84,5 @@ public:
 	__host__ __device__
 	Light* GetLight(int index) {
 		return (Light*)values[index];
-	}
-};
-class devLightHolder : public AppendableArray {
-public:
-	__host__ __device__
-	devLight* GetLight(int index) {
-		return (devLight*)values[index];
 	}
 };

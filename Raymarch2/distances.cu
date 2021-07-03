@@ -10,14 +10,13 @@ DistReturn smoothDist(DistReturn distA, DistReturn distB, float k) {
 
 __device__
 DistReturn regDist(DistReturn distA, DistReturn distB) {
-	DistReturn result;
-	if (distA.dist < distB.dist) {
-		result.col = distA.col;
-		result.dist = distA.dist;
-	}
-	else {
-		result.col = distB.col;
-		result.dist = distB.dist;
-	}
-	return result;
+	if (distA.dist < distB.dist) return distA;
+	else return distB;
+}
+
+__device__ __host__
+DistReturn subDist(DistReturn distA, DistReturn distB) {
+	distB.dist = -1*distB.dist;
+	if (distA.dist > distB.dist) return distA;
+	else return distB;
 }

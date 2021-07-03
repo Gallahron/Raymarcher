@@ -1,505 +1,167 @@
-﻿
-#include "cuda_runtime.h"
-#include "device_launch_parameters.h"
-#include "shapes.cu"
-#include "vectors.cu"
-#include "holder.cu"
-#include "distances.cu"
-#include <cuda_fp16.h>
-//#include "engine.cu"
-
-#include <stdio.h>
-#include <SDL.h>
-
-#define SCREEN_WIDTH 1777
-#define SCREEN_HEIGHT 1000
-#define viewangle 1.0472f
-#define MAX_DIST 100
-#define MIN_DIST 0.01f
+﻿#include <stdio.h>
+#include "engine.cu"
 
 #define MOVE_SPEED 3.0f
 #define M_SENS 0.0005f
-
-#define PI 3.141593f
-
-
-struct Ray {
-	Vector3 pos;
-	Vector3 dir;
-	Vector3 col;
-	float dist;
-	float depth;
-	int steps = 0;
-	int hit = 0;
-};
-
-/*struct ShapeHolder {
-	Shape** values;
-	int length;
-};*/
-
-class Scene {
-public:
-	ShapeHolder shapes;
-	LightHolder lights;
-
-	__device__
-		DistReturn distToScene(Vector3 pos) {
-		DistReturn dist;
-		dist.dist = 9999;
-		dist.col = Vector3(1, 1, 1);
-		for (int i = 0; i < shapes.length; i++) {
-			Shape* ptr = (Shape*)shapes.values[i];
-			DistReturn newDist;
-			switch (ptr->type) {
-			case ('s'):
-				newDist = ((Sphere*)ptr)->DistanceTo(pos);
-				break;
-			case ('c'):
-				newDist = ((Cube*)ptr)->EstimatedDistance(pos);
-				if (smoothDist(dist, newDist, 0.2f).dist < dist.dist) newDist = ((Cube*)ptr)->DistanceTo(pos);
-				else newDist.dist = 9999;
-				break;
-			case ('p'):
-				newDist = ((Plane*)ptr)->DistanceTo(pos);
-				break;
-			case ('h'):
-				newDist = ((HollowCube*)ptr)->EstimatedDistance(pos);
-				if (smoothDist(dist, newDist, 0.2f).dist < dist.dist) newDist = ((HollowCube*)ptr)->DistanceTo(pos);
-				else newDist.dist = 9999;
-				break;
-			}
-			if (ptr->blend) dist = smoothDist(dist, newDist, 0.2f);//fminf(dist.dist, newDist.dist);//smoothDist(dist, newDist, 2);
-			else dist = regDist(dist, newDist);
-		}
-		return dist;
-	}
-
-	__device__
-		Vector3 getNormal(float dist, Vector3 pos) {
-		Vector3 result;
-		Vector3 offsets[] = {
-			Vector3(0.01f,0,0),
-			Vector3(0, 0.01f, 0),
-			Vector3(0, 0, 0.01f)
-		};
-		result.x = dist - distToScene(pos.Sub(offsets[0])).dist;
-		result.y = dist - distToScene(pos.Sub(offsets[1])).dist;
-		result.z = dist - distToScene(pos.Sub(offsets[2])).dist;
-		return result.normalised();
-	}
-};
-
-class devScene {
-public:
-	devShapeHolder shapes;
-	devLightHolder lights;
-
-	devScene(Scene orig) {
-		cudaMalloc(lights.values, sizeof(Uint32) * orig.lights.length);
-		for (int i = 0; i < orig.lights.length; i++) {
-			devLight* ptr;
-			cudaMalloc(&ptr, sizeof(devLight));
-			*ptr = devLight(*orig.lights.GetLight(i));
-			lights.values[i] = ptr;
-		}
-
-		cudaMalloc(shapes.values, sizeof(devShape) * orig.shapes.length);
-		for (int i = 0; i < orig.lights.length; i++) {
-			devShape* ptr;
-			Shape* curr = orig.shapes.GetShape(i);
-			switch (curr->type) {
-				case ('s'):
-					cudaMalloc(&ptr, sizeof(devSphere));
-					*ptr = devSphere(*(Sphere*)curr);
-					break;
-				case ('c'):
-					cudaMalloc(&ptr, sizeof(devCube));
-					*ptr = devCube(*(Cube*)curr);
-					break;
-				case ('p'):
-					cudaMalloc(&ptr, sizeof(devPlane));
-					*ptr = devPlane(*(Plane*)curr);
-					break;
-				case ('h'):
-					cudaMalloc(&ptr, sizeof(devHollowCube));
-					*ptr = devHollowCube(*(HollowCube*)curr);
-					break;
-			}
-			lights.values[i] = ptr;
-		}
-	}
-	__device__
-	DistReturn distToScene(Vector3 pos) {
-		DistReturn dist;
-		dist.dist = 9999;
-		dist.col = Vector3(1, 1, 1);
-		for (int i = 0; i < shapes.length; i++) {
-			Shape* ptr = (Shape*)shapes.values[i];
-			DistReturn newDist;
-			switch (ptr->type) {
-			case ('s'):
-				newDist = ((Sphere*)ptr)->DistanceTo(pos);
-				break;
-			case ('c'):
-				newDist = ((Cube*)ptr)->EstimatedDistance(pos);
-				if (smoothDist(dist, newDist, 0.2f).dist < dist.dist) newDist = ((Cube*)ptr)->DistanceTo(pos);
-				else newDist.dist = 9999;
-				break;
-			case ('p'):
-				newDist = ((Plane*)ptr)->DistanceTo(pos);
-				break;
-			case ('h'):
-				newDist = ((HollowCube*)ptr)->EstimatedDistance(pos);
-				if (smoothDist(dist, newDist, 0.2f).dist < dist.dist) newDist = ((HollowCube*)ptr)->DistanceTo(pos);
-				else newDist.dist = 9999;
-				break;
-			}
-			if (ptr->blend) dist = smoothDist(dist, newDist, 0.2f);//fminf(dist.dist, newDist.dist);//smoothDist(dist, newDist, 2);
-			else dist = regDist(dist, newDist);
-		}
-		return dist;
-	}
-
-	__device__
-		Vector3 getNormal(float dist, Vector3 pos) {
-		Vector3 result;
-		Vector3 offsets[] = {
-			Vector3(0.01f,0,0),
-			Vector3(0, 0.01f, 0),
-			Vector3(0, 0, 0.01f)
-		};
-		result.x = dist - distToScene(pos.Sub(offsets[0])).dist;
-		result.y = dist - distToScene(pos.Sub(offsets[1])).dist;
-		result.z = dist - distToScene(pos.Sub(offsets[2])).dist;
-		return result.normalised();
-	}
-};
-
-__device__
-Uint32 colorMap(Uint32 r, Uint32 g, Uint32 b) {
-	r <<= 16;
-	g <<= 8;
-	return r + g + b;
-}
-
-
-__device__
-Ray genRay(Transform trans, float x, float y, Vector3* bounds, int debug) {
-	struct Ray ray;
-	ray.pos = trans.pos;
-	/*ray.dir.x = 0;
-	ray.dir.y = 0;
-	ray.dir.z = 1;
-	x /= SCREEN_WIDTH;
-	x -= 0.5f;
-	y /= SCREEN_WIDTH;
-	y -= 0.5f;
-
-	ray.dir = ray.dir.RotX(y * viewangle + currRot.x);
-	ray.dir = ray.dir.RotY(x * viewangle + currRot.y);*/
-
-	x /= SCREEN_WIDTH;
-	x -= 0.5f;
-	x *= bounds[0].x;
-	y /= SCREEN_HEIGHT;
-	y -= 0.5f;
-	y *= bounds[1].y;
-	ray.dir.x = x;
-	ray.dir.y = y;
-	ray.dir.z = 1;
-	ray.dir = ray.dir.normalised();
-	ray.dir = ray.dir.RotX(trans.rot.x);
-	ray.dir = ray.dir.RotY(trans.rot.y);
-
-	return ray;
-}
-
-__device__
-Ray rayMarch(Ray ray, Scene scene, int debug, float threshold) {
-	float disttravelled;
-	DistReturn dist;
-	dist = scene.distToScene(ray.pos);
-	disttravelled = 0;
-	while (disttravelled < MAX_DIST && dist.dist > threshold) {
-		ray.pos = ray.pos.Add(ray.dir.Mul(dist.dist));
-
-		disttravelled += dist.dist;
-		dist = scene.distToScene(ray.pos);
-		ray.steps++;
-	}
-	if (dist.dist <= MIN_DIST) {
-		ray.hit = 1;
-	}
-	ray.dist = dist.dist;
-	ray.col = dist.col;
-	ray.depth = disttravelled;
-	return ray;
-}
-
-__device__
-float CalculateLighting(Scene scene, Vector3 position, int debug) {
-	//int noLights = *(&lights + 1) - lights;
-	float lightVal = 0;
-
-	for (int i = 0; i < 1; i++) {
-		Ray ray;
-		float dist = scene.distToScene(position).dist;
-		ray.pos = position.Add(scene.getNormal(dist, position).Mul(0.05f));
-		ray.dir = scene.lights.GetLight(i)->pos.Sub(position).normalised();
-		ray = rayMarch(ray, scene, 0, MIN_DIST);
-		if (!ray.hit) {
-			lightVal += ray.dir.normalised().Dot(scene.getNormal(dist, position));
-		}
-		else lightVal = 0;
-	}
-	if (lightVal < 0.0f) lightVal = 0.0f;
-
-	return lightVal;
-}
-
-__global__
-void ColourCalc(Uint32* pixels, Transform trans, Scene scene, Vector3* bounds) {
-
-	//Blockid is vertical, threadid is horizontal
-	int index = blockIdx.x * blockDim.x + threadIdx.x;
-
-	int debug = 0;
-
-	Ray ray = genRay(trans, index % SCREEN_WIDTH, index / SCREEN_WIDTH, bounds, debug);
-
-	/*ray.dir = ray.dir.RotX(currRot.x);
-	ray.dir = ray.dir.RotY(currRot.y);*/
-	ray = rayMarch(ray, scene, debug, MIN_DIST);
-	float lightVal = 0;
-	if (ray.hit) lightVal = CalculateLighting(scene, ray.pos, debug);
-	else lightVal = 1;
-	//printf("Colour: %f, %f, %f\n", ray.col.x, ray.col.y, ray.col.z);
-	unsigned int r, g, b;
-	r = lightVal * ray.col.x;
-	g = lightVal * ray.col.y;
-	b = lightVal * ray.col.z;
-
-
-	if (!ray.hit) {
-		r = 15;
-		g = 11;
-		b = 21;
-	}
-
-	pixels[index] = colorMap(r, g, b);
-}
-
-void Draw(Uint32* pixels, Transform trans, Scene scene, Vector3* bounds) {
-	devTransform newTrans = devTransform(trans);
-	int blocks = SCREEN_HEIGHT * SCREEN_WIDTH / 1024;
-	ColourCalc <<<blocks, 1024>>> (pixels, trans, scene, bounds);
-}
 
 typedef struct Player {
 	Transform trans;
 	Vector3 veloc;
 } Player;
+
 int main(int argc, char** argv)
 {
+	//Open the window by initialising renderer object
+	Renderer renderer = Renderer(1000, 1000);
 
-	//The window we'll be rendering to
-	SDL_Window* window = NULL;
-
-	//The surface contained by the window
-	SDL_Surface* screenSurface = NULL;
-
+	//Initialise camera
 	Player player;
-	player.trans.pos = Vector3(0, 0, -10);
+	player.trans.pos = Vector3(0, 0, -5);
 	player.trans.rot = Vector3(0, 0, 0);
 
+	//Allocate scene memory
 	Scene* scene;
 	cudaMallocManaged(&scene, sizeof(Scene));
 
+	//Initialise primitives and set colours
 
-	Sphere* spherea = (Sphere*)scene->shapes.CreateSphere(Vector3(0, 0, 0),0.6f, 1);
-	Sphere* sphereb = (Sphere*)scene->shapes.CreateSphere(Vector3(0, 3, 0), 0.6f, 1);
+	Sphere* sphereb = (Sphere*)scene->shapes.CreateSphere(Vector3(0, 3, 0), 0.6f, 0);
 	Plane* plane = (Plane*)scene->shapes.CreatePlane(-2.3f, 0);
 	Cube* cube = (Cube*)scene->shapes.CreateCube(Vector3(0, -2.3f, 0), Vector3(0, 0, 0), Vector3(3.0f, 0.01f, 100.0f), 0);
-	//HollowCube* bounding = (HollowCube*)shapes.CreateHollowCube(Vector3(0, 0, 0), Vector3(0, 0, 0), Vector3(1, 1, 1), 0.05f);*/
+
+
+	Cube* wall0 = (Cube*)scene->shapes.CreateCube(Vector3(-10, 0, 0), Vector3(0, 0, 0), Vector3(1.0f, 10.f, 10.0f), 0);
+	Cube* wall1 = (Cube*)scene->shapes.CreateCube(Vector3(10, 0, 0), Vector3(0, 0, 0), Vector3(1.0f, 10.f, 10.0f), 0);
+	Cube* wall2 = (Cube*)scene->shapes.CreateCube(Vector3(0, 0, 10), Vector3(0, 0, 0), Vector3(10.0f, 10.f, 1.0f), 0);
+	Cube* wall3 = (Cube*)scene->shapes.CreateCube(Vector3(0, 0, -10), Vector3(0, 0, 0), Vector3(10.0f, 10.f, 1.0f), 0);
+	Sphere* spherea = (Sphere*)scene->shapes.CreateSphere(Vector3(-10, 0, 0), 3.0f, 2);
 
 	spherea->col = Vector3(187, 134, 252);
 	sphereb->col = Vector3(187, 134, 252);
 	plane->col = Vector3(18, 18, 18);
 	cube->col = Vector3(50, 50, 50);
-	//bounding->col = Vector3(0, 1, 1);*/
 
+	wall0->col = Vector3(255, 0, 0);
+	wall1->col = Vector3(255, 0, 0);
+	wall2->col = Vector3(255, 0, 0);
+	wall3->col = Vector3(255, 0, 0);
+	
+	//Add light to scene
+	scene->lights.AddLight(Vector3(0, 5, 0), 1);
 
-	Vector3 veloc = Vector3(0, 0, 0);
+	//Set up timekeeping variables
+	int time = SDL_GetTicks();
 	float deltaTime;
 
-	Vector3* bounds;
-	cudaMallocManaged(&bounds, 2 * sizeof(Vector3));
+	//Main loop flag
+	bool quit = false;
 
-	float yViewAngle = SCREEN_HEIGHT / (float)SCREEN_WIDTH * viewangle;
-	bounds[0] = Vector3(0, 0, 1).RotY(viewangle / 2);
-	bounds[1] = Vector3(0, 0, 1).RotX(yViewAngle / 2);
-	
+	//Flag to lock screen to allow for screenshots
+	int lockMouse = 0;
 
-	/*Light* lights;
-	cudaMallocManaged(&lights, 1 * sizeof(Light));*/
-	scene->lights.AddLight(Vector3(0, 5, 0), 1); //lights[0] = Light(Vector3(0, 5, 0));
+	//Event handler
+	SDL_Event e;
 
-	cudaStream_t stream1;
-	cudaStreamCreate(&stream1);
-
-	void* pixelBuffer;
-
-	cudaMallocManaged(&pixelBuffer, SCREEN_WIDTH * SCREEN_HEIGHT * sizeof(Uint32));
-	//Initialize SDL
-	if (SDL_Init(SDL_INIT_VIDEO) < 0)
+	//Loop until window is closed
+	while (!quit)
 	{
-		printf("SDL could not initialize! SDL_Error: %s\n", SDL_GetError());
-	}
-	else
-	{
-		//Create window
-		window = SDL_CreateWindow("Raymarch", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, SCREEN_WIDTH, SCREEN_HEIGHT, SDL_WINDOW_SHOWN);
-		SDL_SetWindowPosition(window, 72, 0);
-		if (window == NULL)
+		//Iterate over all events
+		while (SDL_PollEvent(&e) != 0)
 		{
-			printf("Window could not be created! SDL_Error: %s\n", SDL_GetError());
-		}
-		else
-		{
-			//Get window surface
-			screenSurface = SDL_GetWindowSurface(window);
-			SDL_SetRelativeMouseMode(SDL_TRUE);
+			switch (e.type) {
+				//Camera look code
+				case (SDL_MOUSEMOTION):
+					if (!lockMouse) {
+						player.trans.rot.x += e.motion.yrel * M_SENS;
+						player.trans.rot.y += e.motion.xrel * M_SENS;
+					}
+					break;
 
-			
+				//Keydown logic
+				case (SDL_KEYDOWN):
+					switch (e.key.keysym.sym) {
+						case SDLK_w:
+							player.veloc.z = MOVE_SPEED;
+							break;
+						case SDLK_s:
+							player.veloc.z = -MOVE_SPEED;
+							break;
+						case SDLK_a:
+							player.veloc.x = -MOVE_SPEED;
+							break;
+						case SDLK_d:
+							player.veloc.x = MOVE_SPEED;
+							break;
+						case SDLK_e:
+							player.veloc.y = MOVE_SPEED;
+							break;
+						case SDLK_q:
+							player.veloc.y = -MOVE_SPEED;
+							break;
+						case SDLK_SPACE:
+							lockMouse = 1 - lockMouse;
+							break;
+						case SDLK_ESCAPE:
+							quit = true;
+							break;
+						}
+					break;
 
-
-			int time = SDL_GetTicks();
-
-			//Main loop flag
-			bool quit = false;
-
-			//Event handler
-			SDL_Event e;
-			//While application is running
-			while (!quit)
+				//Keyup logic
+				case (SDL_KEYUP):
+					switch (e.key.keysym.sym) {
+						case SDLK_w:
+							player.veloc.z = 0;
+							break;
+						case SDLK_s:
+							player.veloc.z = 0;
+							break;
+						case SDLK_a:
+							player.veloc.x = 0;
+							break;
+						case SDLK_d:
+							player.veloc.x = 0;
+							break;
+						case SDLK_e:
+							player.veloc.y = 0;
+							break;
+						case SDLK_q:
+							player.veloc.y = 0;
+							break;
+						}
+					break;
+			}
+			//If quit button pressed
+			if (e.type == SDL_QUIT)
 			{
-				//Handle events on queue
-				while (SDL_PollEvent(&e) != 0)
-				{
-					switch (e.type) {
-					
-						case (SDL_MOUSEMOTION):
-							player.trans.rot.x += e.motion.yrel*M_SENS;
-							player.trans.rot.y += e.motion.xrel*M_SENS;
-							break;
-						case (SDL_KEYDOWN):
-							switch (e.key.keysym.sym) {
-								case SDLK_w:
-									player.veloc.z = MOVE_SPEED;
-									break;
-
-								case SDLK_s:
-									player.veloc.z = -MOVE_SPEED;
-									break;
-
-								case SDLK_a:
-									player.veloc.x = -MOVE_SPEED;
-									break;
-
-								case SDLK_d:
-									player.veloc.x = MOVE_SPEED;
-									break;
-
-								case SDLK_e:
-									player.veloc.y = MOVE_SPEED;
-									break;
-
-								case SDLK_q:
-									player.veloc.y = -MOVE_SPEED;
-									break;
-
-								case SDLK_ESCAPE:
-									quit = true;
-									break;
-							}
-							break;
-						case (SDL_KEYUP):
-							switch (e.key.keysym.sym) {
-								case SDLK_w:
-									player.veloc.z = 0;
-									break;
-								case SDLK_s:
-									player.veloc.z = 0;
-									break;
-
-								case SDLK_a:
-									player.veloc.x = 0;
-									break;
-
-								case SDLK_d:
-									player.veloc.x = 0;
-									break;
-
-								case SDLK_e:
-									player.veloc.y = 0;
-									break;
-
-								case SDLK_q:
-									player.veloc.y = 0;
-									break;
-							}
-							break;
-					}
-					//User requests quit
-					if (e.type == SDL_QUIT)
-					{
-						quit = true;
-					}
-				}
-
-				SDL_LockSurface(screenSurface);
-				
-				Draw ((Uint32*)pixelBuffer, player.trans, *scene, bounds);
-				
-				cudaMemcpyAsync(screenSurface->pixels, pixelBuffer, SCREEN_WIDTH* SCREEN_HEIGHT * sizeof(Uint32), cudaMemcpyDeviceToHost, stream1);
-				cudaDeviceSynchronize();
-				
-				/*sphere->pos.x = 20;//cos(SDL_GetTicks() / 1000.0f);
-				sphere->pos.y = sin(SDL_GetTicks() / 1000.0f);
-				cube->pos.x = 5*sin(SDL_GetTicks() / 1000.0f);
-				cube->pos.z = 5*cos(SDL_GetTicks() / 1000.0f);
-				cube->rot.y = SDL_GetTicks() / 100.0f;*/
-				spherea->trans.pos.x = 1*cos(SDL_GetTicks() / 10000.0f+1.58f);
-				sphereb->trans.pos.y = 1*cos(SDL_GetTicks() / 10000.0f+1.58f);
-
-				
-
-				player.trans.pos = player.trans.pos.Add(player.veloc.ApplyRot(player.trans.rot).Mul(deltaTime));
-				scene->lights.GetLight(0)->pos = player.trans.pos.Add(Vector3(0, 10, 0));
-
-				deltaTime = (SDL_GetTicks() - time) / 1000.0f;
-				printf("Time for frame: %ums\n", SDL_GetTicks() - time);
-				time = SDL_GetTicks();
-
-				//SDL_memcpy(screenSurface->pixels, pixels, SCREEN_WIDTH * SCREEN_HEIGHT * sizeof(Uint32));
-
-				SDL_UnlockSurface(screenSurface);
-
-				//Update the surface
-				SDL_UpdateWindowSurface(window);
-				
-
-				
-				
+				quit = true;
 			}
 		}
-	}
-	//Destroy window
-	SDL_DestroyWindow(window);
 
-	//Quit SDL subsystems
-	SDL_Quit();
+		//Move spheres
+		//spherea->trans.pos.x = -1 + -1 * cos(SDL_GetTicks() / 1000.0f) / 3;
+		//spherea->trans.pos.y = -0.3f + 1 * cos(SDL_GetTicks() / 1000.0f) / 3;
+		sphereb->trans.pos.x = -1 + 1 * cos(SDL_GetTicks() / 1000.0f + 1.58f) / 3;
+		sphereb->trans.pos.y = -0.3f + 1 * cos(SDL_GetTicks() / 1000.0f + 1.58f) / 3;
+		//spherea->trans.pos = player.trans.pos;
+		//Move player
+		player.trans.pos = player.trans.pos.Add(player.veloc.ApplyRot(player.trans.rot).Mul(deltaTime));
+
+		//Position light above player
+		scene->lights.GetLight(0)->pos = player.trans.pos.Add(Vector3(0, 0, 0));
+
+		//Draw frame
+		renderer.Draw(player.trans, *scene);
+
+		//Calculate time between frames
+		deltaTime = (SDL_GetTicks() - time) / 1000.0f;
+
+		//Debug text
+		//printf("Time for frame: %ums\n", SDL_GetTicks() - time);
+		printf("Distance to sphere: %f\n", subDist(wall0->DistanceTo(player.trans.pos), spherea->DistanceTo(player.trans.pos)).dist);
+		//Update time since program start
+		time = SDL_GetTicks();
+	}
 
 	return 0;
 }

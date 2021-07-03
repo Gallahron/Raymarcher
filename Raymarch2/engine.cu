@@ -1,6 +1,16 @@
-#include "vectors.cu"
-#include <stdio.h>
+#include "cuda_runtime.h"
+#include "device_launch_parameters.h"
 #include <SDL.h>
+
+#include "shapes.cu"
+#include "vectors.cu"
+#include "holder.cu"
+#include "distances.cu"
+#include "scene.cu"
+
+#define PI 3.141593f
+#define SKIP_PIXELS 3
+
 struct Ray {
 	Vector3 pos;
 	Vector3 dir;
@@ -10,63 +20,65 @@ struct Ray {
 	int steps = 0;
 	int hit = 0;
 };
-class ShapeHolder {
-public:
-	Shape** values;
-	int length;
-	__host__
-		void AddShape(Shape* ptr) {
-		Shape** newVals;
-		cudaMallocManaged(&newVals, sizeof(Uint32) * (length + 1));
-		for (int i = 0; i < length; i++) {
-			newVals[i] = values[i];
-		}
-		newVals[length] = ptr;
-		Shape** stor = values;
-		values = newVals;
-		cudaFree(stor);
-		length++;
-	}
-	__host__
-		Shape* CreateSphere(Vector3 pos, float rad, int blended) {
-		Sphere* ptr;
-		cudaMallocManaged(&ptr, sizeof(Sphere));
-		*ptr = Sphere(pos, 0.6f, blended);
-		AddShape(ptr);
-		return ptr;
-	}
-	__host__
-		Shape* CreatePlane(float height, int blended) {
-		Plane* ptr;
-		cudaMallocManaged(&ptr, sizeof(Plane));
-		*ptr = Plane(height, blended);
-		AddShape(ptr);
-		return ptr;
-	}
-	__host__
-		Shape* CreateCube(Vector3 pos, Vector3 rot, Vector3 bounds, int blended) {
-		Cube* ptr;
-		cudaMallocManaged(&ptr, sizeof(Cube));
-		*ptr = Cube(pos, rot, bounds, blended);
 
-		AddShape(ptr);
-		return ptr;
-	}
-	__host__
-		Shape* CreateHollowCube(Vector3 pos, Vector3 rot, Vector3 bounds, float thickness, int blended) {
-		HollowCube* ptr;
-		cudaMallocManaged(&ptr, sizeof(Cube));
-		*ptr = HollowCube(pos, rot, bounds, thickness, blended);
-
-		AddShape(ptr);
-		return ptr;
-	}
+struct RenderInfo {
+	int SCREEN_WIDTH;
+	int SCREEN_HEIGHT;
+	float viewangle;
+	float MAX_DIST;
+	float MIN_DIST;
+	Vector3* bounds;
 };
-/*struct ShapeHolder {
-	Shape** values;
-	int length;
-};*/
 
+class Renderer {
+public:
+	RenderInfo* info;
+
+	SDL_Window* window;
+	SDL_Surface* screenSurface;
+	__host__
+	Renderer(int xres, int yres) {
+
+		cudaMallocManaged(&info, sizeof(RenderInfo));
+		info->SCREEN_WIDTH = xres;
+		info->SCREEN_HEIGHT = yres;
+		info->viewangle = 1.5704f;
+		info->MAX_DIST = 100;
+		info->MIN_DIST = 0.01f;
+
+		window = SDL_CreateWindow("Raymarch", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, xres, yres, SDL_WINDOW_SHOWN);
+
+		screenSurface = SDL_GetWindowSurface(window);
+
+		//SDL_SetWindowPosition(window, 72, 100);
+		SDL_SetRelativeMouseMode(SDL_TRUE);
+
+		cudaMallocManaged(&info->bounds, 2 * sizeof(Vector3));
+
+		float yViewAngle = yres / (float)xres * info->viewangle;
+		info->bounds[0] = Vector3(0, 0, 1).RotY(info->viewangle / 2);
+		info->bounds[1] = Vector3(0, 0, 1).RotX(yViewAngle / 2);
+
+		cudaStreamCreate(&stream1);
+
+		cudaMallocManaged(&pixelBuffer, xres * yres * sizeof(Uint32));
+	}
+	__host__
+		void Draw(Transform camera, Scene scene);
+
+	__host__
+	void Quit() {
+		//Destroy window
+		SDL_DestroyWindow(window);
+
+		//Quit SDL
+		SDL_Quit();
+	}
+
+private:
+	cudaStream_t stream1;
+	void* pixelBuffer;
+};
 
 __device__
 Uint32 colorMap(Uint32 r, Uint32 g, Uint32 b) {
@@ -75,79 +87,11 @@ Uint32 colorMap(Uint32 r, Uint32 g, Uint32 b) {
 	return r + g + b;
 }
 
-__device__
-DistReturn smoothDist(DistReturn distA, DistReturn distB, float k) {
-	DistReturn result;
-	float h = __saturatef(0.5f + 0.5f * (distB.dist - distA.dist) / k);
-
-	result.col = distB.col.Lerp(distA.col, h);
-	result.dist = distB.dist * (1 - h) + distA.dist * h - k * h * (1.0f - h);
-	return result;
-}
 
 __device__
-DistReturn regDist(DistReturn distA, DistReturn distB) {
-	DistReturn result;
-	if (distA.dist < distB.dist) {
-		result.col = distA.col;
-		result.dist = distA.dist;
-	}
-	else {
-		result.col = distB.col;
-		result.dist = distB.dist;
-	}
-	return result;
-}
-__device__
-DistReturn distToScene(Vector3 pos) {
-	DistReturn dist;
-	dist.dist = 9999;
-	dist.col = Vector3(1, 1, 1);
-	for (int i = 0; i < shapes.length; i++) {
-		Shape* ptr = shapes.values[i];
-		DistReturn newDist;
-		switch (ptr->type) {
-		case ('s'):
-			newDist = ((Sphere*)ptr)->DistanceTo(pos);
-			break;
-		case ('c'):
-			newDist = ((Cube*)ptr)->EstimatedDistance(pos);
-			if (smoothDist(dist, newDist, 0.2f).dist < dist.dist) newDist = ((Cube*)ptr)->DistanceTo(pos);
-			else newDist.dist = 9999;
-			break;
-		case ('p'):
-			newDist = ((Plane*)ptr)->DistanceTo(pos);
-			break;
-		case ('h'):
-			newDist = ((HollowCube*)ptr)->EstimatedDistance(pos);
-			if (smoothDist(dist, newDist, 0.2f).dist < dist.dist) newDist = ((HollowCube*)ptr)->DistanceTo(pos);
-			else newDist.dist = 9999;
-			break;
-		}
-		if (ptr->blend) dist = smoothDist(dist, newDist, 0.2f);//fminf(dist.dist, newDist.dist);//smoothDist(dist, newDist, 2);
-		else dist = regDist(dist, newDist);
-	}
-	return dist;
-}
-
-__device__
-Vector3 getNormal(float dist, Vector3 pos) {
-	Vector3 result;
-	Vector3 offsets[] = {
-		Vector3(0.01f,0,0),
-		Vector3(0, 0.01f, 0),
-		Vector3(0, 0, 0.01f)
-	};
-	result.x = dist - distToScene(pos.Sub(offsets[0])).dist;
-	result.y = dist - distToScene(pos.Sub(offsets[1])).dist;
-	result.z = dist - distToScene(pos.Sub(offsets[2])).dist;
-	return result.normalised();
-}
-
-__device__
-Ray genRay(Vector3 currPos, Vector3 currRot, float x, float y, Vector3* bounds, int debug) {
+Ray genRay(Transform camera, float x, float y, RenderInfo* info, int debug) {
 	struct Ray ray;
-	ray.pos = currPos;
+	ray.pos = camera.pos;
 	/*ray.dir.x = 0;
 	ray.dir.y = 0;
 	ray.dir.z = 1;
@@ -159,36 +103,35 @@ Ray genRay(Vector3 currPos, Vector3 currRot, float x, float y, Vector3* bounds, 
 	ray.dir = ray.dir.RotX(y * viewangle + currRot.x);
 	ray.dir = ray.dir.RotY(x * viewangle + currRot.y);*/
 
-	x /= SCREEN_WIDTH;
+	x /= info->SCREEN_WIDTH;
 	x -= 0.5f;
-	x *= bounds[0].x;
-	y /= SCREEN_HEIGHT;
+	x *= info->bounds[0].x;
+	y /= info->SCREEN_HEIGHT;
 	y -= 0.5f;
-	y *= bounds[1].y;
+	y *= info->bounds[1].y;
 	ray.dir.x = x;
 	ray.dir.y = y;
 	ray.dir.z = 1;
 	ray.dir = ray.dir.normalised();
-	ray.dir = ray.dir.RotX(currRot.x);
-	ray.dir = ray.dir.RotY(currRot.y);
+	ray.dir = ray.dir.RotX(camera.rot.x);
+	ray.dir = ray.dir.RotY(camera.rot.y);
 
 	return ray;
 }
 
 __device__
-Ray rayMarch(Ray ray, int debug, float threshold) {
+Ray rayMarch(Ray ray, Scene scene, RenderInfo* info, int maxDist, int debug) {
 	float disttravelled;
 	DistReturn dist;
-	dist = distToScene(ray.pos);
+	dist = scene.distToScene(ray.pos);
 	disttravelled = 0;
-	while (disttravelled < MAX_DIST && dist.dist > threshold) {
+	while (disttravelled < maxDist && dist.dist > info->MIN_DIST) {
 		ray.pos = ray.pos.Add(ray.dir.Mul(dist.dist));
-
+		dist = scene.distToScene(ray.pos);
 		disttravelled += dist.dist;
-		dist = distToScene(ray.pos);
 		ray.steps++;
 	}
-	if (dist.dist <= MIN_DIST) {
+	if (dist.dist <= info->MIN_DIST) {
 		ray.hit = 1;
 	}
 	ray.dist = dist.dist;
@@ -198,18 +141,19 @@ Ray rayMarch(Ray ray, int debug, float threshold) {
 }
 
 __device__
-float CalculateLighting(Light* lights, Vector3 position, int debug) {
-	int noLights = *(&lights + 1) - lights;
+float CalculateLighting(Scene scene, Vector3 position, RenderInfo* info, int debug) {
+	//int noLights = *(&lights + 1) - lights;
 	float lightVal = 0;
 
 	for (int i = 0; i < 1; i++) {
 		Ray ray;
-		float dist = distToScene(position).dist;
-		ray.pos = position.Add(getNormal(dist, position).Mul(0.05f));
-		ray.dir = lights[i].pos.Sub(position).normalised();
-		ray = rayMarch(ray, 0, MIN_DIST);
+		float dist = scene.distToScene(position).dist;
+		ray.pos = position.Add(scene.getNormal(dist, position).Mul(0.05f));
+		ray.dir = scene.lights.GetLight(i)->pos.Sub(position).normalised();
+		ray.dist = 0;
+		ray = rayMarch(ray, scene, info, scene.lights.GetLight(i)->pos.Dist(ray.pos), 0);
 		if (!ray.hit) {
-			lightVal += ray.dir.normalised().Dot(getNormal(dist, position));
+			lightVal += ray.dir.normalised().Dot(scene.getNormal(dist, position));
 		}
 		else lightVal = 0;
 	}
@@ -219,20 +163,20 @@ float CalculateLighting(Light* lights, Vector3 position, int debug) {
 }
 
 __global__
-void ColourCalc(Uint32* pixels, Vector3 currPos, Vector3 currRot, Light* lights, Vector3* bounds) {
+void ColourCalc(Uint32* pixels, Transform trans, Scene scene, RenderInfo* info) {
 
 	//Blockid is vertical, threadid is horizontal
-	int index = blockIdx.x * blockDim.x + threadIdx.x;
+	int index = (blockIdx.x * blockDim.x + threadIdx.x)*SKIP_PIXELS;
 
 	int debug = 0;
 
-	Ray ray = genRay(currPos, currRot, index % SCREEN_WIDTH, index / SCREEN_WIDTH, bounds, debug);
+	Ray ray = genRay(trans, index % info->SCREEN_WIDTH, index / info->SCREEN_WIDTH, info, debug);
 
 	/*ray.dir = ray.dir.RotX(currRot.x);
 	ray.dir = ray.dir.RotY(currRot.y);*/
-	ray = rayMarch(ray, debug, MIN_DIST);
+	ray = rayMarch(ray, scene, info, info->MAX_DIST, debug);
 	float lightVal = 0;
-	if (ray.hit) lightVal = CalculateLighting(lights, ray.pos, debug);
+	if (ray.hit) lightVal = CalculateLighting(scene, ray.pos, info, debug);
 	else lightVal = 1;
 	//printf("Colour: %f, %f, %f\n", ray.col.x, ray.col.y, ray.col.z);
 	unsigned int r, g, b;
@@ -248,4 +192,20 @@ void ColourCalc(Uint32* pixels, Vector3 currPos, Vector3 currRot, Light* lights,
 	}
 
 	pixels[index] = colorMap(r, g, b);
+}
+
+void Renderer::Draw(Transform camera, Scene scene) {
+		int noPixels = info->SCREEN_HEIGHT * info->SCREEN_WIDTH;
+		int blocks = noPixels / 1024 / SKIP_PIXELS;
+
+		
+		SDL_LockSurface(screenSurface);
+
+		ColourCalc << <blocks, 1024 >> > ((Uint32*)pixelBuffer, camera, scene, info);
+		cudaMemcpyAsync(screenSurface->pixels, pixelBuffer, noPixels * sizeof(Uint32), cudaMemcpyDeviceToHost, stream1);
+
+		cudaDeviceSynchronize();
+
+		SDL_UnlockSurface(screenSurface);
+		SDL_UpdateWindowSurface(window);
 }
