@@ -1,5 +1,7 @@
-#include "shapes.cu"
+#include "lights.cu"
 #pragma once
+
+class Shape;
 
 class AppendableArray {
 public:
@@ -27,48 +29,11 @@ public:
 
 class ShapeHolder : public AppendableArray {
 public:
-	__host__
-		Shape* CreateSphere(Vector3 pos, float rad, int blended) {
-		Sphere* ptr;
-		cudaMallocManaged(&ptr, sizeof(Sphere));
-		*ptr = Sphere(pos, rad, blended);
-		AddElement(ptr);
-		return ptr;
-	}
-	__host__
-		Shape* CreatePlane(float height, int blended) {
-		Plane* ptr;
-		cudaMallocManaged(&ptr, sizeof(Plane));
-		*ptr = Plane(height, blended);
-		AddElement(ptr);
-		return ptr;
-	}
-	__host__
-		Shape* CreateCube(Vector3 pos, Vector3 rot, Vector3 bounds, int blended) {
-		Cube* ptr;
-		cudaMallocManaged(&ptr, sizeof(Cube));
-		*ptr = Cube(pos, rot, bounds, blended);
-
-		AddElement(ptr);
-		return ptr;
-	}
-	__host__
-		Shape* CreateHollowCube(Vector3 pos, Vector3 rot, Vector3 bounds, float thickness, int blended) {
-		HollowCube* ptr;
-		cudaMallocManaged(&ptr, sizeof(Cube));
-		*ptr = HollowCube(pos, rot, bounds, thickness, blended);
-
-		AddElement(ptr);
-		return ptr;
-	}
 	__host__ __device__
 	Shape* GetShape(int index) {
 		return (Shape*)values[index];
 	}
 };
-
-
-
 
 
 class LightHolder : public AppendableArray {

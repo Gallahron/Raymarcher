@@ -92,16 +92,6 @@ __device__
 Ray genRay(Transform camera, float x, float y, RenderInfo* info, int debug) {
 	struct Ray ray;
 	ray.pos = camera.pos;
-	/*ray.dir.x = 0;
-	ray.dir.y = 0;
-	ray.dir.z = 1;
-	x /= SCREEN_WIDTH;
-	x -= 0.5f;
-	y /= SCREEN_WIDTH;
-	y -= 0.5f;
-
-	ray.dir = ray.dir.RotX(y * viewangle + currRot.x);
-	ray.dir = ray.dir.RotY(x * viewangle + currRot.y);*/
 
 	x /= info->SCREEN_WIDTH;
 	x -= 0.5f;
@@ -145,26 +135,22 @@ float CalculateLighting(Scene scene, Vector3 position, RenderInfo* info, int deb
 	//int noLights = *(&lights + 1) - lights;
 	float lightVal = 0;
 
-	for (int i = 0; i < 1; i++) {
+	for (int i = 0; i < scene.lights.length; i++) {
 		Ray ray;
 		float dist = scene.distToScene(position).dist;
-		ray.pos = position.Add(scene.getNormal(dist, position).Mul(0.05f));
+		Vector3 normal = scene.getNormal(dist, position);
+		ray.pos = position.Add(normal.Mul(0.05f));
 		ray.dir = scene.lights.GetLight(i)->pos.Sub(position).normalised();
-		ray.dist = 0;
 		ray = rayMarch(ray, scene, info, scene.lights.GetLight(i)->pos.Dist(ray.pos), 0);
 		if (!ray.hit) {
-			lightVal += ray.dir.normalised().Dot(scene.getNormal(dist, position));
+			lightVal += ray.dir.normalised().Dot(normal);
 		}
-		else lightVal = 0;
 	}
-	if (lightVal < 0.0f) lightVal = 0.0f;
-
-	return lightVal;
+	return __saturatef(lightVal);
 }
 
 __global__
 void ColourCalc(Uint32* pixels, Transform trans, Scene scene, RenderInfo* info) {
-
 	//Blockid is vertical, threadid is horizontal
 	int index = (blockIdx.x * blockDim.x + threadIdx.x)*SKIP_PIXELS;
 
@@ -190,6 +176,7 @@ void ColourCalc(Uint32* pixels, Transform trans, Scene scene, RenderInfo* info) 
 		g = 11;
 		b = 21;
 	}
+
 
 	pixels[index] = colorMap(r, g, b);
 }

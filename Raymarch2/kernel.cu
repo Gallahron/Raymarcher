@@ -1,7 +1,7 @@
 ﻿#include <stdio.h>
 #include "engine.cu"
 
-#define MOVE_SPEED 3.0f
+#define MOVE_SPEED 6.0f
 #define M_SENS 0.0005f
 
 typedef struct Player {
@@ -25,21 +25,33 @@ int main(int argc, char** argv)
 
 	//Initialise primitives and set colours
 
-	Sphere* sphereb = (Sphere*)scene->shapes.CreateSphere(Vector3(0, 3, 0), 0.6f, 0);
-	Plane* plane = (Plane*)scene->shapes.CreatePlane(-2.3f, 0);
-	Cube* cube = (Cube*)scene->shapes.CreateCube(Vector3(0, -2.3f, 0), Vector3(0, 0, 0), Vector3(3.0f, 0.01f, 100.0f), 0);
+	Sphere* sphereb = (Sphere*)Sphere::Add(&scene->shapes, Vector3(0, 3, 0), 0.6f, 0);
+	
+	Cube* cube = (Cube*)Cube::Add(&scene->shapes, Vector3(0, -2.3f, 0), Vector3(0, 0, 0), Vector3(3.0f, 0.01f, 100.0f), 0);
 
+	Octahedron* pyramid = (Octahedron*)Octahedron::Add(&scene->shapes, Vector3(-40, -3.0f, 0), Vector3(0, 0, 0), 15.0f, 0);
+	Cube* pyramidDoorway = (Cube*)Cube::Add(&scene->shapes, Vector3(-30.0f, 0, 0), Vector3(0, 0, 0), Vector3(5.0f, 3.0f, 3.0f), 0);
+	Octahedron* pyramidInside = (Octahedron*)Octahedron::Add(&scene->shapes, Vector3(-40, -3.0f, 0), Vector3(0, 0, 0), 14.0f, 2);
+	Cube* pyramidDoor = (Cube*)Cube::Add(&scene->shapes, Vector3(-30.0f, 0, 0), Vector3(0, 0, 0), Vector3(5.1f, 2.5f, 2.5f), 2);
 
-	Cube* wall0 = (Cube*)scene->shapes.CreateCube(Vector3(-10, 0, 0), Vector3(0, 0, 0), Vector3(1.0f, 10.f, 10.0f), 0);
-	Cube* wall1 = (Cube*)scene->shapes.CreateCube(Vector3(10, 0, 0), Vector3(0, 0, 0), Vector3(1.0f, 10.f, 10.0f), 0);
-	Cube* wall2 = (Cube*)scene->shapes.CreateCube(Vector3(0, 0, 10), Vector3(0, 0, 0), Vector3(10.0f, 10.f, 1.0f), 0);
-	Cube* wall3 = (Cube*)scene->shapes.CreateCube(Vector3(0, 0, -10), Vector3(0, 0, 0), Vector3(10.0f, 10.f, 1.0f), 0);
-	Sphere* spherea = (Sphere*)scene->shapes.CreateSphere(Vector3(-10, 0, 0), 3.0f, 2);
+	Cube* wall0 = (Cube*)Cube::Add(&scene->shapes, Vector3(-10, 0, 0), Vector3(0, 0, 0), Vector3(1.0f, 10.f, 10.0f), 0);
+	Cube* wall1 = (Cube*)Cube::Add(&scene->shapes, Vector3(10, 0, 0), Vector3(0, 0, 0), Vector3(1.0f, 10.f, 10.0f), 0);
+	Cube* wall2 = (Cube*)Cube::Add(&scene->shapes, Vector3(0, 0, 10), Vector3(0, 0, 0), Vector3(10.0f, 10.f, 1.0f), 0);
+	Cube* wall3 = (Cube*)Cube::Add(&scene->shapes, Vector3(0, 0, -10), Vector3(0, 0, 0), Vector3(10.0f, 10.f, 1.0f), 0);
+	Sphere* spherea = (Sphere*)Sphere::Add(&scene->shapes, Vector3(-10, 0, 0), 3.0f, 2);
+	Plane* plane = (Plane*)Plane::Add(&scene->shapes, -2.3f, 0);
 
+	/*Composite* comp = (Composite*)Composite::Add(&scene->shapes, Vector3(0, 0, 0), Vector3(0, 0, 0), Vector3(0, 0, 0), 0);
+	Sphere* compSphere = (Sphere*)Sphere::Add(&comp->children, Vector3(-10, 0, 0), 3.0f, 2);*/
 	spherea->col = Vector3(187, 134, 252);
 	sphereb->col = Vector3(187, 134, 252);
 	plane->col = Vector3(18, 18, 18);
 	cube->col = Vector3(50, 50, 50);
+
+	pyramid->col = Vector3(255, 0, 255);
+	pyramidInside->col = Vector3(255, 0, 0);
+	pyramidDoorway->col = Vector3(255, 0, 255);
+	pyramidDoor->col = Vector3(255, 0, 0);
 
 	wall0->col = Vector3(255, 0, 0);
 	wall1->col = Vector3(255, 0, 0);
@@ -47,7 +59,8 @@ int main(int argc, char** argv)
 	wall3->col = Vector3(255, 0, 0);
 	
 	//Add light to scene
-	scene->lights.AddLight(Vector3(0, 5, 0), 1);
+	scene->lights.AddLight(Vector3(-150, 100, 0), 1);
+	//scene->lights.AddLight(Vector3(150, 100, 0), 1);
 
 	//Set up timekeeping variables
 	int time = SDL_GetTicks();
@@ -157,9 +170,8 @@ int main(int argc, char** argv)
 		deltaTime = (SDL_GetTicks() - time) / 1000.0f;
 
 		//Debug text
-		//printf("Time for frame: %ums\n", SDL_GetTicks() - time);
-		printf("Distance to sphere: %f\n", subDist(wall0->DistanceTo(player.trans.pos), spherea->DistanceTo(player.trans.pos)).dist);
-		//Update time since program start
+		printf("Time for frame: %ums\n", SDL_GetTicks() - time);
+		//printf("Distance to sphere: %f\n", pyramid->DistanceTo(player.trans.pos));
 		time = SDL_GetTicks();
 	}
 

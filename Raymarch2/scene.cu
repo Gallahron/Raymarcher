@@ -1,5 +1,6 @@
 
 #include "holder.cu"
+#include "composite.cu"
 #pragma once
 class Scene {
 public:
@@ -26,6 +27,12 @@ public:
 					break;
 				case ('h'):
 					newDist = ((HollowCube*)ptr)->DistanceTo(pos);
+					break;
+				case ('o'):
+					newDist = ((Octahedron*)ptr)->DistanceTo(pos);
+					break;
+				case ('x'):
+					newDist = ((Composite*)ptr)->DistanceTo(pos);
 					break;
 			}
 

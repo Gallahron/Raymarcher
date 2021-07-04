@@ -1,3 +1,4 @@
+#pragma once
 __device__
 DistReturn smoothDist(DistReturn distA, DistReturn distB, float k) {
 	DistReturn result;
@@ -14,7 +15,7 @@ DistReturn regDist(DistReturn distA, DistReturn distB) {
 	else return distB;
 }
 
-__device__ __host__
+__device__
 DistReturn subDist(DistReturn distA, DistReturn distB) {
 	distB.dist = -1*distB.dist;
 	if (distA.dist > distB.dist) return distA;
